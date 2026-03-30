@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { List, CheckCircle, AlertTriangle, Plus, Trash2, Copy, CheckCircle as CopyIcon } from 'lucide-react';
+import { List, CheckCircle, AlertTriangle, Plus, Trash2, Copy, CheckCircle as CopyIcon, Globe, RefreshCw, Loader2 } from 'lucide-react';
 
 interface Heading {
   level: number;
@@ -11,19 +11,62 @@ interface Heading {
 
 export default function HeadingChecker() {
   const [html, setHtml] = useState('');
+  const [url, setUrl] = useState('');
   const [results, setResults] = useState<Heading[]>([]);
   const [showResults, setShowResults] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [addedHeadings, setAddedHeadings] = useState<{ level: number; text: string }[]>([
     { level: 1, text: '' },
   ]);
 
+  const fetchAndAnalyze = async () => {
+    if (!url.trim()) return;
+    setIsLoading(true);
+    
+    try {
+      const response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+      const content = await response.text();
+      setHtml(content);
+      
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(content, 'text/html');
+      
+      const headingRegex = /<h([1-6])[^>]*>(.*?)<\/h\1>/gi;
+      const headings: Heading[] = [];
+      let match;
+      const counts: { [key: number]: number } = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+
+      const hElements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6');
+      hElements.forEach((el) => {
+        const level = parseInt(el.tagName.charAt(1));
+        const text = el.textContent?.trim() || '';
+        if (text) {
+          counts[level]++;
+          if (!headings.some(h => h.level === level && h.text === text)) {
+            headings.push({ level, text, count: 1 });
+          } else {
+            const existing = headings.find(h => h.level === level && h.text === text);
+            if (existing) existing.count++;
+          }
+        }
+      });
+
+      setResults(headings.sort((a, b) => a.level - b.level));
+      setShowResults(true);
+    } catch (error) {
+      alert('Could not fetch the URL. Please check if the URL is correct.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const analyzeHeadings = () => {
     const headingRegex = /<h([1-6])[^>]*>(.*?)<\/h\1>/gi;
     const headings: Heading[] = [];
-    let match;
-    let counts: { [key: number]: number } = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+    const counts: { [key: number]: number } = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
 
+    let match;
     while ((match = headingRegex.exec(html)) !== null) {
       const level = parseInt(match[1]);
       const text = match[2].replace(/<[^>]*>/g, '').trim();
@@ -67,6 +110,15 @@ export default function HeadingChecker() {
 
   const h1Count = results.filter(h => h.level === 1).length;
   const h1Issues = h1Count !== 1;
+  const hasSkippedLevels = checkSkippedLevels(results);
+
+  const function checkSkippedLevels(headings: Heading[]): boolean {
+    const levels = headings.map(h => h.level).sort((a, b) => a - b);
+    for (let i = 1; i < levels.length; i++) {
+      if (levels[i] - levels[i-1] > 1) return true;
+    }
+    return false;
+  }
 
   return (
     <div className="p-6 lg:p-8">
@@ -78,12 +130,34 @@ export default function HeadingChecker() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-4">
           <div className="bg-white rounded-xl border border-gray-200 p-6">
-            <h3 className="font-semibold text-gray-900 mb-4">Analyze Existing Content</h3>
+            <h3 className="font-semibold text-gray-900 mb-4">Fetch & Analyze URL</h3>
+            <div className="flex gap-4">
+              <input
+                type="text"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="Enter URL to analyze headings..."
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                onKeyDown={(e) => e.key === 'Enter' && fetchAndAnalyze()}
+              />
+              <button
+                onClick={fetchAndAnalyze}
+                disabled={isLoading || !url.trim()}
+                className="bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700 disabled:bg-gray-300 transition-colors flex items-center gap-2"
+              >
+                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+                Fetch
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="font-semibold text-gray-900 mb-4">Or Paste HTML</h3>
             <textarea
               value={html}
               onChange={(e) => setHtml(e.target.value)}
               placeholder="Paste your HTML content here to analyze heading structure..."
-              rows={10}
+              rows={8}
               className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none font-mono text-sm"
             />
             <button
@@ -152,19 +226,17 @@ export default function HeadingChecker() {
         <div className="space-y-4">
           {showResults && (
             <>
-              <div className={`rounded-xl p-4 ${h1Issues ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'}`}>
+              <div className={`rounded-xl p-4 ${h1Issues || hasSkippedLevels ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'}`}>
                 <div className="flex items-center gap-3">
-                  {h1Issues ? (
+                  {h1Issues || hasSkippedLevels ? (
                     <AlertTriangle className="h-6 w-6 text-yellow-600" />
                   ) : (
                     <CheckCircle className="h-6 w-6 text-green-600" />
                   )}
                   <div>
-                    <p className={`font-medium ${h1Issues ? 'text-yellow-800' : 'text-green-800'}`}>
-                      H1 Tag Status: {h1Issues ? 'Issues Found' : 'Good'}
-                    </p>
-                    <p className={`text-sm ${h1Issues ? 'text-yellow-700' : 'text-green-700'}`}>
-                      Found {h1Count} H1 tag(s) - {h1Count === 1 ? 'Correct' : 'Should have exactly 1 H1'}
+                    <p className={`font-medium ${h1Issues || hasSkippedLevels ? 'text-yellow-800' : 'text-green-800'}`}>
+                      H1 Tag Status: {h1Issues ? `${h1Count} found (should be 1)` : 'Good'}
+                      {hasSkippedLevels && ' - Skipped heading levels'}
                     </p>
                   </div>
                 </div>
@@ -180,9 +252,12 @@ export default function HeadingChecker() {
                       const found = results.filter(h => h.level === level);
                       return (
                         <div key={level} className="flex items-center gap-4">
-                          <span className={`w-12 text-sm font-bold ${
-                            level === 1 ? 'text-xl' : level === 2 ? 'text-lg' : 'text-base'
-                          } text-gray-900`}>
+                          <span className={`w-12 font-bold ${
+                            level === 1 ? 'text-xl text-red-600' :
+                            level === 2 ? 'text-lg text-orange-600' :
+                            level === 3 ? 'text-base text-yellow-600' :
+                            'text-sm text-gray-600'
+                          }`}>
                             H{level}
                           </span>
                           <div className="flex-1 bg-gray-100 rounded-full h-4 overflow-hidden">
@@ -194,7 +269,7 @@ export default function HeadingChecker() {
                                 level === 4 ? 'bg-green-500' :
                                 level === 5 ? 'bg-blue-500' : 'bg-indigo-500'
                               }`}
-                              style={{ width: `${Math.min(100, (found.length / Math.max(1, results.length)) * 100)}%` }}
+                              style={{ width: `${Math.min(100, found.length * 20)}%` }}
                             />
                           </div>
                           <span className="w-8 text-sm text-gray-600">{found.length}</span>
@@ -207,7 +282,7 @@ export default function HeadingChecker() {
 
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-                  <h3 className="font-semibold text-gray-900">Detected Headings</h3>
+                  <h3 className="font-semibold text-gray-900">Detected Headings ({results.length})</h3>
                 </div>
                 <div className="divide-y divide-gray-200 max-h-64 overflow-y-auto">
                   {results.map((heading, index) => (
@@ -222,10 +297,17 @@ export default function HeadingChecker() {
                       </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">{heading.text}</p>
-                        <p className="text-xs text-gray-500">Found {heading.count} time(s)</p>
+                        {heading.count > 1 && (
+                          <p className="text-xs text-gray-500">Found {heading.count} times</p>
+                        )}
                       </div>
                     </div>
                   ))}
+                  {results.length === 0 && (
+                    <div className="p-4 text-center text-gray-500">
+                      No headings found
+                    </div>
+                  )}
                 </div>
               </div>
 
